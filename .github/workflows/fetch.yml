@@ -1,0 +1,31 @@
+name: fetch
+on:
+  workflow_dispatch:
+    inputs:
+      want:
+        description: 'file extension to fetch'
+        default: 'apk'
+permissions:
+  contents: write
+jobs:
+  f:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --quiet requests
+      - name: fetch
+        env:
+          WANT: ${{ inputs.want }}
+        run: python3 fetch.py
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="v$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "asset $TAG" --notes "auto"
+          for f in *.apk *.zip *.dmg *.exe *.ipa; do
+            [ -e "$f" ] || continue
+            gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber
+          done
