@@ -25,7 +25,10 @@ jobs:
           set -e
           TAG="v$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "asset $TAG" --notes "auto"
-          for f in *.apk *.zip *.dmg *.exe *.ipa; do
-            [ -e "$f" ] || continue
+          for f in *; do
+            [ -f "$f" ] || continue
+            sz=$(stat -c%s "$f")
+            [ "$sz" -gt 1000000 ] || continue
+            echo "uploading $f ($sz)"
             gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY" --clobber
           done
