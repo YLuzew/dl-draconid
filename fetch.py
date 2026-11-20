@@ -23,62 +23,42 @@ for pat in (r'name="csrf_token"\s+(?:value|content)="([^"]+)"', r'"csrf_token"\s
         csrf = m.group(1); break
 print("CSRF", repr(csrf), flush=True)
 
-ids = []
+# 精确解析: 每个 upload 块 -> (upload_id, 文件名)
+uploads = []
 for m in re.finditer(r'data-upload_id="(\d+)"', html):
-    if m.group(1) not in ids:
-        ids.append(m.group(1))
-print("IDS", ids, flush=True)
-
-names = {}
-for uid in ids:
-    i = html.find('data-upload_id="%s"' % uid)
-    seg = html[max(0, i-600): i+1600]
-    fn = re.findall(r'([A-Za-z0-9][A-Za-z0-9._\-]{3,}\.(?:apk|zip|dmg|exe|ipa))', seg)
-    names[uid] = sorted(set(fn))
-print("NAMES", json.dumps(names, ensure_ascii=False), flush=True)
-
-results = []
-for uid in ids:
-    url = "%s/file/%s?source=game_download" % (SITE, uid)
-    try:
-        rr = s.post(url,
-                    data={"csrf_token": csrf} if csrf else {},
-                    headers={"X-Requested-With": "XMLHttpRequest", "Referer": SITE,
-                             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
-                    timeout=90, allow_redirects=False)
-        print("POST", uid, rr.status_code, rr.text[:300].replace("\n", " "), flush=True)
-        try:
-            j = rr.json()
-        except Exception:
-            continue
-        u = j.get("url")
-        if u:
-            results.append((uid, u))
-    except Exception as e:
-        print("ERR", uid, e, flush=True)
-
-print("URLS", json.dumps(results, ensure_ascii=False), flush=True)
-open("urls.json", "w").write(json.dumps(results))
+    uid = m.group(1)
+    tail = html[m.start(): m.start()+2500]
+    stop = tail.find('data-upload_id="', 10)
+    if stop > 0:
+        tail = tail[:stop]
+    fn = re.search(r'href="/file/' + uid + r'[^"]*"[^>]*>\s*([^<]+?)\s*</a>', tail)
+    size = re.search(r'file_size[^>]*>\s*<span>([^<]+)</span>', tail)
+    name = fn.group(1).strip() if fn else None
+    if not name:
+        cand = re.findall(r'([A-Za-z0-9][A-Za-z0-9._\-]{3,}\.(?:apk|zip|dmg|exe|ipa))', tail)
+        name = cand[0] if cand else None
+    uploads.append({"id": uid, "name": name, "size": size.group(1) if size else None})
+print("UPLOADS", json.dumps(uploads, ensure_ascii=False), flush=True)
 
 picked = None
-for uid, u in results:
-    if want in u.lower():
-        picked = (uid, u); break
+for u in uploads:
+    if u["name"] and u["name"].lower().endswith("." + want):
+        picked = u; break
 if not picked:
-    for uid, u in results:
-        if any(n.lower().endswith("." + want) for n in names.get(uid, [])):
-            picked = (uid, u); break
-if not picked and results:
-    picked = results[0]
+    print("NO_MATCH", want, flush=True); sys.exit(1)
+print("PICKED", json.dumps(picked, ensure_ascii=False), flush=True)
 
-if not picked:
-    print("NO_URL_FOUND", flush=True); sys.exit(1)
+url = "%s/file/%s?source=game_download" % (SITE, picked["id"])
+rr = s.post(url, data={"csrf_token": csrf} if csrf else {},
+            headers={"X-Requested-With": "XMLHttpRequest", "Referer": SITE,
+                     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
+            timeout=90, allow_redirects=False)
+print("POST", rr.status_code, rr.text[:200].replace("\n", " "), flush=True)
+dl = rr.json()["url"]
 
-uid, u = picked
-fn = u.split("?")[0].rstrip("/").split("/")[-1] or ("file-%s.%s" % (uid, want))
-fn = re.sub(r'[^A-Za-z0-9._\-]', '_', fn)
+fn = re.sub(r'[^A-Za-z0-9._\-]', '_', picked["name"])
 print("DOWNLOAD", fn, flush=True)
-with s.get(u, stream=True, timeout=180) as resp:
+with s.get(dl, stream=True, timeout=180) as resp:
     resp.raise_for_status()
     total = int(resp.headers.get("Content-Length") or 0)
     got = 0; nxt = 50 << 20
@@ -90,4 +70,3 @@ with s.get(u, stream=True, timeout=180) as resp:
                 print("  %.1f/%.1f MB" % (got/1e6, total/1e6 if total else 0), flush=True)
                 nxt += 50 << 20
 print("SAVED", fn, os.path.getsize(fn), flush=True)
-open("saved.txt", "w").write(fn)
